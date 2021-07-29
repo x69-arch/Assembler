@@ -61,17 +61,15 @@ pub enum Token<'a> {
 }
 
 #[repr(transparent)]
-pub struct Lexer<'a, T: Logos<'a, Source = str>>(logos::Lexer<'a, T>);
-pub struct Lexeme<'a, T> {
+pub struct Lexer<'a, T: Logos<'a>>(logos::Lexer<'a, T>);
+pub struct Lexeme<'a, T: logos::Logos<'a>> {
     pub token: T,
-    pub slice: &'a str,
+    pub slice: &'a <T as Logos<'a>>::Source,
 }
 
-impl<'a, T: Logos<'a, Source = str>> Lexer<'a, T> {
-    pub fn new(source: &'a str) -> Self
-        where <T as Logos<'a>>::Extras: Default,
-    {
-        Self(T::lexer(source))
+impl<'a> Lexer<'a, Token<'a>> {
+    pub fn new(source: &'a str) -> Self {
+        Self(Token::lexer(source))
     }
 }
 

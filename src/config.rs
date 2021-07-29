@@ -42,6 +42,7 @@ pub struct TransitionTable {
 
 #[derive(Debug)]
 pub struct Instruction {
+    pub syntaxes: Vec<String>,
     pub states: Vec<TransitionTable>,
 }
 
@@ -85,7 +86,9 @@ pub fn parse(source: &str) -> (Option<Assembler>, Vec<Log>) {
             }
         };
         
-        let states = &mut map.entry(name.clone()).or_insert(Instruction { states: vec![TransitionTable::default()] }).states;
+        let instruction = &mut map.entry(name.clone()).or_insert(Instruction { syntaxes: Vec::new(), states: vec![TransitionTable::default()] });
+        
+        let states = &mut instruction.states;
         let mut current_state = 0;
         let mut registers = 0;
         let mut accept_state = false;
@@ -205,6 +208,16 @@ pub fn parse(source: &str) -> (Option<Assembler>, Vec<Log>) {
         }
         if !accept_state {
             log!(Error, "expected '->' following an instruction pattern");
+        } else {
+            let syntax = source.split_once("->").unwrap().0;
+            let lex_fold = Lexer::new(syntax).fold(String::with_capacity(16), |a, Lexeme{slice,..}| {
+                if slice == "," || a.is_empty() {
+                    a + slice
+                } else {
+                    a + " " + slice
+                }
+            });
+            instruction.syntaxes.push(lex_fold.to_lowercase());
         }
     }
     

@@ -14,5 +14,6 @@ fn main() {
     logs.iter().for_each(|l| println!("{}", l));
     if let Some(assembler) = assembler {
         assembler.instructions.iter().for_each(|(k, v)| println!("{:?}, {:#?}", k, v));
+        assembler.instructions.iter().for_each(|(_, v)| println!("{:?}", v.syntaxes));
     }
 }
