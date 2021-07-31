@@ -33,3 +33,21 @@ impl std::fmt::Display for Log {
         write!(f, "{}:{}: {}", origin, line + 1, message)
     }
 }
+
+#[macro_export]
+macro_rules! log {
+    ($kind:ident, $origin:expr, $line:expr, $msg:expr) => {
+        Log::$kind {
+            origin: $origin.to_owned(),
+            line: $line,
+            message: format!($msg),
+        }
+    };
+    ($kind:ident, $origin:expr, $line:expr, $msg:expr, $($params:expr),+) => {
+        Log::$kind {
+            origin: $origin.to_owned(),
+            line: $line,
+            message: format!($msg, $($params),+)
+        }
+    };
+}
