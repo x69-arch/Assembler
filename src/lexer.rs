@@ -26,6 +26,9 @@ pub enum Token<'a> {
     #[regex("[rR]\\d+", |lex| trim(lex, 1, 0).parse())]
     Register(usize),
     
+    #[regex("[iI]\\d+", |lex| trim(lex, 1, 0).parse())]
+    Immediate(usize),
+    
     #[regex("[_a-zA-Z]\\w*:")]
     Label(&'a str),
     

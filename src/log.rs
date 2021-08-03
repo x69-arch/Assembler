@@ -44,6 +44,45 @@ impl std::fmt::Display for Log {
     }
 }
 
+#[derive(Debug)]
+pub struct Logger {
+    pub origin: Option<Origin>,
+    logs: Vec<Log>,
+}
+
+impl Logger {
+    pub fn new(origin: Option<Origin>) -> Self {
+        Self {
+            origin,
+            logs: Vec::new(),
+        }
+    }
+    
+    pub fn log_warning(&mut self, message: String) {
+        self.logs.push(Log::new(LogLevel::Warning, self.origin.clone(), message));
+    }
+    
+    pub fn log_error(&mut self, message: String) {
+        self.logs.push(Log::new(LogLevel::Error, self.origin.clone(), message));
+    }
+    
+    pub fn is_error(&self) -> bool {
+        self.logs.iter().any(Log::is_error)
+    }
+    
+    pub fn into_none<T>(self) -> LoggedResult<T> {
+        LoggedResult { result: None, logs: self.logs }
+    }
+    
+    pub fn into_result<T, F: FnOnce() -> T>(self, callback: F) -> LoggedResult<T> {
+        let result = if self.is_error() {
+            None
+        } else {
+            Some(callback())
+        };
+        LoggedResult { result, logs: self.logs}
+    }
+}
 
 pub struct LoggedResult<T> {
     result: Option<T>,
@@ -51,91 +90,18 @@ pub struct LoggedResult<T> {
 }
 
 impl<T> LoggedResult<T> {
-    pub fn new() -> Self {
-        Self {
-            result: None,
-            logs: Vec::new()
-        }
-    }
-    
     pub fn logs(&self) -> &[Log] { &self.logs }
+    pub fn value(self) -> Option<T> { self.result }
     
-    pub fn log_warning(&mut self, message: String) {
-        self.logs.push(Log::new(LogLevel::Warning, None, message));
-    }
-    pub fn log_error(&mut self, message: String) {
-        self.result = None;
-        self.logs.push(Log::new(LogLevel::Error, None, message));
-    }
-    
-    pub fn push_log(&mut self, log: Log) {
-        if log.is_error() {
-            self.result = None;
-        }
-        self.logs.push(log);
-    }
-    
-    pub fn map_origin(mut self, origin: Origin) -> Self {
-        for log in &mut self.logs {
+    pub fn if_ok<F: FnOnce(T)>(self, logger: &mut Logger, callback: F) {
+        for mut log in self.logs {
             if log.origin.is_none() {
-                // TODO: clone every iteration except for the last one
-                log.origin = Some(origin.clone());
+                log.origin = logger.origin.clone();
             }
+            logger.logs.push(log);
         }
-        self
-    }
-    
-    pub fn take_log_and<T2, F: FnOnce(T)>(self, result: &mut LoggedResult<T2>, callback: F) {
-        result.logs.extend(self.logs);
-        if let Some(val) = self.result {
-            callback(val);
+        if let Some(result) = self.result {
+            callback(result);
         }
     }
-    
-    pub fn is_error(&self) -> bool {
-        self.logs.iter().any(Log::is_error)
-    }
-    
-    pub fn return_value<F>(mut self, callback: F) -> Self
-        where F: FnOnce() -> T
-    {
-        if !self.is_error() {
-            self.result = Some(callback());
-        }
-        self
-    }
-    
-    pub fn value(self) -> Option<T> {
-        self.result
-    }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-#[macro_export]
-macro_rules! log {
-    ($kind:ident, $origin:expr, $line:expr, $msg:expr) => {
-        crate::log::Log::new(
-            crate::log::LogLevel::$kind,
-            Some(crate::log::Origin { file: $origin.to_owned(), line: $line }),
-            format!($msg)
-        )
-    };
-    ($kind:ident, $origin:expr, $line:expr, $msg:expr, $($params:expr),+) => {
-        crate::log::Log::new(
-            crate::log::LogLevel::$kind,
-            Some(crate::log::Origin { file: $origin.to_owned(), line: $line }),
-            format!($msg, $($params),+)
-        )
-    };
 }

@@ -1,4 +1,4 @@
-use crate::{log, log::LoggedResult};
+use crate::log::{Logger, LoggedResult, Origin};
 use crate::lexer::{Lexer, Lexeme, Token};
 use std::collections::HashMap;
 
@@ -65,10 +65,11 @@ impl Assembler {
         let origin = "[unknonn]";
         let mut captured_registers = Vec::new();
         let mut output = Vec::new();
-        let mut result = LoggedResult::new();
+        let mut logger = Logger::new(None);
         
         'outer: for (line, source) in source.lines().enumerate() {
             let mut lexer = Lexer::new(source);
+            logger.origin = Some(Origin { file: origin.to_owned(), line });
             captured_registers.clear();
             
             if let Some(lexeme) = lexer.next() {
@@ -79,7 +80,7 @@ impl Assembler {
                         let instruction = if let Some(ins) = self.instructions.get(&name) {
                             ins
                         } else {
-                            result.push_log(log!(Error, origin, line, "unknown instruction: '{}'", lexeme.slice));
+                            logger.log_error(format!("unknown instruction: '{}'", lexeme.slice));
                             continue;
                         };
                         
@@ -90,14 +91,14 @@ impl Assembler {
                                 Some(Lexeme{ token: Token::Register(r), slice }) => {
                                     if let Transition::NextState(next) = instruction.states[current_state].register {
                                         if r > 15 {
-                                            result.push_log(log!(Error, origin, line, "register out of bounds: '{}'", slice));
+                                            logger.log_error(format!("register out of bounds: '{}'", slice));
                                             continue 'outer;
                                         }
                                         captured_registers.push(r as u8);
                                         current_state = next;
                                     } else {
-                                        result.push_log(log!(Error, origin, line, "unexpected register: '{}'", slice));
-                                        result.push_log(log!(Error, origin, line, "syntaxes available for {}: {:?}", name, instruction.syntaxes));
+                                        logger.log_error(format!("unexpected register: '{}'", slice));
+                                        logger.log_error(format!("syntaxes available for {}: {:?}", name, instruction.syntaxes));
                                         continue 'outer;
                                     }
                                 },
@@ -106,8 +107,8 @@ impl Assembler {
                                     if let Transition::NextState(next) = instruction.states[current_state].comma {
                                         current_state = next;
                                     } else {
-                                        result.push_log(log!(Error, origin, line, "unexpected comma"));
-                                        result.push_log(log!(Error, origin, line, "syntaxes available for {}: {:?}", name, instruction.syntaxes));
+                                        logger.log_error("unexpected comma".to_owned());
+                                        logger.log_error(format!("syntaxes available for {}: {:?}", name, instruction.syntaxes));
                                         continue 'outer;
                                     }
                                 },
@@ -116,15 +117,15 @@ impl Assembler {
                                     if let Some(ref codegen) = instruction.states[current_state].accept_codegen {
                                         break codegen;
                                     } else {
-                                        result.push_log(log!(Error, origin, line, "syntax error"));
-                                        result.push_log(log!(Error, origin, line, "syntaxes available for {}: {:?}", name, instruction.syntaxes));
+                                        logger.log_error("syntax error".to_owned());
+                                        logger.log_error(format!("syntaxes available for {}: {:?}", name, instruction.syntaxes));
                                         continue 'outer;
                                     }
                                 },
                                 
                                 Some(Lexeme{ slice, .. }) => {
-                                    result.push_log(log!(Error, origin, line, "unexpected token: '{}'", slice));
-                                    result.push_log(log!(Error, origin, line, "syntaxes available for {}: {:?}", name, instruction.syntaxes));
+                                    logger.log_error(format!("unexpected token: '{}'", slice));
+                                    logger.log_error(format!("syntaxes available for {}: {:?}", name, instruction.syntaxes));
                                     continue 'outer;
                                 },
                             }
@@ -142,11 +143,11 @@ impl Assembler {
                         }
                     },
                     
-                    _ => result.push_log(log!(Error, origin, line, "unexpected token: '{}'", lexeme.slice))
+                    _ => logger.log_error(format!("unexpected token: '{}'", lexeme.slice))
                 }
             }
         }
         
-        result.return_value(||output)
+        logger.into_result(||output)
     }
 }

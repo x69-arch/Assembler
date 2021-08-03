@@ -1,33 +1,33 @@
 use crate::lexer::{Lexer, Lexeme, Token};
-use crate::{log, log::{LoggedResult, Origin}};
+use crate::log::{Logger, LoggedResult, Origin};
 use crate::parser::*;
 use std::collections::HashMap;
 
 fn codegen_brackets<'a>(lexer: &mut Lexer<'a, Token<'a>>, name: &str, registers: usize) -> LoggedResult<Codegen> {
-    let mut result = LoggedResult::new();
+    let mut logger = Logger::new(None);
     
     macro_rules! match_codegen_data_after {
         ($after:expr) => {
             match lexer.next() {
                 Some(Lexeme { token: Token::Integer(int), slice }) => {
                     if int > 0xF {
-                        result.log_warning(format!("{} is larger than 4 bits and will be truncated", slice));
+                        logger.log_warning(format!("{} is larger than 4 bits and will be truncated", slice));
                     }
                     CodegenData::Byte((int & 0xF) as u8)
                 },
                 Some(Lexeme { token: Token::Register(r), .. }) => {
                     if r >= registers {
-                        result.log_error(format!("'{}' uses register {} which is not given in the instruction pattern", name, r));
+                        logger.log_error(format!("'{}' uses register {} which is not given in the instruction pattern", name, r));
                     }
                     CodegenData::Register(r)
                 },
                 Some(Lexeme { slice, .. }) => {
-                    result.log_error(format!("expected a literal or register after '{}', but got '{}'", $after, slice));
-                    return result;
+                    logger.log_error(format!("expected a literal or register after '{}', but got '{}'", $after, slice));
+                    return logger.into_none();
                 }
                 None => {
-                    result.log_error(format!("expected a literal or register after '{}'", $after));
-                    return result;
+                    logger.log_error(format!("expected a literal or register after '{}'", $after));
+                    return logger.into_none();
                 }
             };
         }
@@ -37,12 +37,12 @@ fn codegen_brackets<'a>(lexer: &mut Lexer<'a, Token<'a>>, name: &str, registers:
             match lexer.next() {
                 Some(Lexeme { token: $token, .. }) => {},
                 Some(Lexeme { slice, .. }) => {
-                    result.log_error(format!("expected '{}' in bracket group, but got '{}'", $symbol, slice));
-                    return result;
+                    logger.log_error(format!("expected '{}' in bracket group, but got '{}'", $symbol, slice));
+                    return logger.into_none();
                 },
                 None => {
-                    result.log_error(format!("expected '{}' in bracket group", $symbol));
-                    return result;
+                    logger.log_error(format!("expected '{}' in bracket group", $symbol));
+                    return logger.into_none();
                 }
             }
         }
@@ -53,15 +53,16 @@ fn codegen_brackets<'a>(lexer: &mut Lexer<'a, Token<'a>>, name: &str, registers:
     let lower = match_codegen_data_after!('|');
     match_symbol!(Token::CloseBracket, ']');
     
-    result.return_value(|| Codegen::UpperLower(upper, lower))
+    logger.into_result(|| Codegen::UpperLower(upper, lower))
 }
 
 pub fn create_assembler_from_config(config: &str) -> LoggedResult<Assembler> {
     let origin = "[unknown]";
     let mut map = HashMap::new();
-    let mut result = LoggedResult::new();
+    let mut logger = Logger::new(None);
     
     for (line, source) in config.lines().enumerate() {
+        logger.origin = Some(Origin { file: origin.to_owned(), line });
         let mut lexer = Lexer::new(source);
         
         // Only supports instructions right now
@@ -69,7 +70,7 @@ pub fn create_assembler_from_config(config: &str) -> LoggedResult<Assembler> {
             Some(Lexeme { token: Token::Ident(name), .. }) => name.to_lowercase(),
             None => continue,
             _ => {
-                result.push_log(log!(Error, origin, line, "only instruction patterns are supported in the assembler config at the moment"));
+                logger.log_error("only instruction patterns are supported in the assembler config at the moment".to_owned());
                 continue;
             }
         };
@@ -86,7 +87,7 @@ pub fn create_assembler_from_config(config: &str) -> LoggedResult<Assembler> {
             match token.token {
                 Token::Register(r) => {
                     if r != registers {
-                        result.push_log(log!(Warning, origin, line, "registers are parsed in the order they appear regardless of number; {} will correspond to r{} in codegen", token.slice, registers));
+                        logger.log_warning(format!("registers are parsed in the order they appear regardless of number; {} will correspond to r{} in codegen", token.slice, registers));
                     }
                     if let Transition::NextState(next) = states[current_state].register {
                         current_state = next;
@@ -110,34 +111,31 @@ pub fn create_assembler_from_config(config: &str) -> LoggedResult<Assembler> {
                 
                 Token::Arrow => {
                     if states[current_state].accept_codegen.is_some() {
-                        result.push_log(log!(Error, origin, line, "conflicting patterns for instruction '{}'", name));
+                        logger.log_error(format!("conflicting patterns for instruction '{}'", name));
                     } else {
                         let mut codegen = Vec::new();
                         while let Some(token) = lexer.next() {
                             match token.token {
                                 Token::Integer(int) => {
                                     if int > 255 {
-                                        result.push_log(log!(Warning, origin, line, "{} is larger than a byte and will be truncated", token.slice));
+                                        logger.log_warning(format!("{} is larger than 8 bits and will be truncated", token.slice));
                                     }
                                     codegen.push(Codegen::byte(int as u8));
                                 },
                                 
                                 Token::Register(r) => {
                                     if r >= registers {
-                                        result.push_log(log!(Error, origin, line, "'{}' uses register {} which is not given in the instruction pattern", name, r));
+                                        logger.log_error(format!("'{}' uses register {} which is not given in the instruction pattern", name, r));
                                     }
                                     codegen.push(Codegen::register(r));
                                 }
                                 
                                 Token::OpenBracket => {
-                                    codegen_brackets(&mut lexer, &name, registers).map_origin(Origin {
-                                        file: origin.to_owned(),
-                                        line,
-                                    }).take_log_and(&mut result, |bracket| codegen.push(bracket));
+                                    codegen_brackets(&mut lexer, &name, registers).if_ok(&mut logger, |bracket| codegen.push(bracket));
                                 },
                                 
                                 _ => {
-                                    result.push_log(log!(Error, origin, line, "codegen only supports literal values, registers, and bracket groups, but got '{}'", token.slice));
+                                    logger.log_error(format!("codegen only supports literal values, registers, and bracket groups, but got '{}'", token.slice));
                                     break;
                                 },
                             }
@@ -148,11 +146,11 @@ pub fn create_assembler_from_config(config: &str) -> LoggedResult<Assembler> {
                     break;
                 },
                 
-                _ => result.push_log(log!(Error, origin, line, "unexpected token in instrution pattern: '{}'", token.slice))
+                _ => logger.log_error(format!("unexpected token in instrution pattern: '{}'", token.slice))
             }
         }
         if !accept_state {
-            result.push_log(log!(Error, origin, line, "expected '->' following an instruction pattern"));
+            logger.log_error("expected '->' following an instruction pattern".to_owned());
         } else {
             let syntax = source.split_once("->").unwrap().0;
             let lex_fold = Lexer::new(syntax).fold(String::with_capacity(16), |a, Lexeme{slice,..}| {
@@ -167,5 +165,5 @@ pub fn create_assembler_from_config(config: &str) -> LoggedResult<Assembler> {
     }
     
     // If an error was reported
-    result.return_value(|| Assembler { instructions: map })
+    logger.into_result(|| Assembler { instructions: map })
 }
