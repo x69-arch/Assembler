@@ -3,7 +3,7 @@ use crate::log::{Logger, LoggedResult, Origin};
 use crate::parser::*;
 use std::collections::HashMap;
 
-fn codegen_brackets<'a>(lexer: &mut Lexer<'a, Token<'a>>, name: &str, registers: usize) -> LoggedResult<Codegen> {
+fn codegen_brackets<'a>(lexer: &mut Lexer<'a, Token<'a>>, name: &str, registers: usize, immediates: &[(usize, usize)]) -> LoggedResult<Codegen> {
     let mut logger = Logger::new(None);
     
     macro_rules! match_codegen_data_after {
@@ -14,6 +14,18 @@ fn codegen_brackets<'a>(lexer: &mut Lexer<'a, Token<'a>>, name: &str, registers:
                         logger.log_warning(format!("{} is larger than 4 bits and will be truncated", slice));
                     }
                     CodegenData::Byte((int & 0xF) as u8)
+                },
+                Some(Lexeme { token: Token::Immediate(im), .. }) => {
+                    if im >= immediates.len() {
+                        logger.log_error(format!("'{}' uses immediate {} which is not given in the instruction pattern", name, im));
+                        return logger.into_none();
+                    }
+                    let immediate = immediates[im];
+                    if immediate.1 != 4 {
+                        logger.log_error("width of immediate in bracket group must be 4 (for now)".to_owned());
+                        return logger.into_none();
+                    }
+                    CodegenData::Immediate(immediate.0, immediate.1)
                 },
                 Some(Lexeme { token: Token::Register(r), .. }) => {
                     if r >= registers {
@@ -80,11 +92,43 @@ pub fn create_assembler_from_config(config: &str) -> LoggedResult<Assembler> {
         let states = &mut instruction.states;
         let mut current_state = 0;
         let mut registers = 0;
+        let mut immediates = Vec::new();
         let mut accept_state = false;
         
         // Generate DFA
         while let Some(token) = lexer.next() {
             match token.token {
+                Token::Immediate(im) => {
+                    if im > immediates.len() {
+                        logger.log_warning(format!("immediates are parsed in the order they appear regardless of number; {} will correspond to i{} in codegen", token.slice, immediates.len()));
+                    }
+                    match lexer.next() {
+                        Some(Lexeme { token: Token::Colon, .. }) => {
+                            let width = match lexer.next() {
+                                Some(Lexeme { token: Token::Integer(width), .. }) => width,
+                                Some(Lexeme { slice, .. }) => {
+                                    logger.log_error(format!("expected width of immediate, but got: '{}'", slice));
+                                    break;
+                                },
+                                None => {
+                                    logger.log_error("expected width of immediate".to_owned());
+                                    break;
+                                }
+                            };
+                            immediates.push((im, width));
+                            if let Transition::NextState(next) = states[current_state].immediate {
+                                current_state = next;
+                            } else {
+                                states[current_state].immediate = Transition::NextState(states.len());
+                                current_state = states.len();
+                                states.push(TransitionTable::default());
+                            }
+                        },
+                        Some(Lexeme { slice, .. }) => logger.log_error(format!("expected width of immediate, but got '{}'", slice)),
+                        None => logger.log_error("expected width of immediate".to_owned()),
+                    }
+                }
+                
                 Token::Register(r) => {
                     if r != registers {
                         logger.log_warning(format!("registers are parsed in the order they appear regardless of number; {} will correspond to r{} in codegen", token.slice, registers));
@@ -123,6 +167,19 @@ pub fn create_assembler_from_config(config: &str) -> LoggedResult<Assembler> {
                                     codegen.push(Codegen::byte(int as u8));
                                 },
                                 
+                                Token::Immediate(im) => {
+                                    if im >= immediates.len() {
+                                        logger.log_error(format!("'{}' uses immediate {} which is not given in the instruction pattern", name, im));
+                                        break;
+                                    }
+                                    let immediate = immediates[im];
+                                    if immediate.1 % 8 != 0 {
+                                        logger.log_error("immediate width must be byte aligned (for now)".to_owned());
+                                    } else {
+                                        codegen.push(Codegen::immediate(immediate.0, immediate.1));
+                                    }
+                                },
+                                
                                 Token::Register(r) => {
                                     if r >= registers {
                                         logger.log_error(format!("'{}' uses register {} which is not given in the instruction pattern", name, r));
@@ -131,7 +188,7 @@ pub fn create_assembler_from_config(config: &str) -> LoggedResult<Assembler> {
                                 }
                                 
                                 Token::OpenBracket => {
-                                    codegen_brackets(&mut lexer, &name, registers).if_ok(&mut logger, |bracket| codegen.push(bracket));
+                                    codegen_brackets(&mut lexer, &name, registers, &immediates).if_ok(&mut logger, |bracket| codegen.push(bracket));
                                 },
                                 
                                 _ => {
@@ -154,7 +211,7 @@ pub fn create_assembler_from_config(config: &str) -> LoggedResult<Assembler> {
         } else {
             let syntax = source.split_once("->").unwrap().0;
             let lex_fold = Lexer::new(syntax).fold(String::with_capacity(16), |a, Lexeme{slice,..}| {
-                if slice == "," || a.is_empty() {
+                if a.is_empty() || a.ends_with(':') || slice == "," || slice == ":"{
                     a + slice
                 } else {
                     a + " " + slice

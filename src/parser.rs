@@ -5,17 +5,9 @@ use std::collections::HashMap;
 #[derive(Debug)]
 pub enum CodegenData {
     Byte(u8),
+    Immediate(usize, usize),
     Register(usize),
 }
-impl CodegenData {
-    fn as_byte(&self, registers: &[u8]) -> u8 {
-        match *self {
-            CodegenData::Byte(b) => b,
-            CodegenData::Register(r) => registers[r],
-        }
-    }
-}
-
 
 #[derive(Debug)]
 pub enum Codegen {
@@ -27,6 +19,7 @@ pub enum Codegen {
 }
 impl Codegen {
     pub fn byte(b: u8) -> Self { Codegen::Data(CodegenData::Byte(b)) }
+    pub fn immediate(imm: usize, b: usize) -> Self { Codegen::Data(CodegenData::Immediate(imm, b)) }
     pub fn register(r: usize) -> Self { Codegen::Data(CodegenData::Register(r)) }
 }
 
@@ -42,6 +35,7 @@ impl Default for Transition {
 #[derive(Debug, Default)]
 pub struct TransitionTable {
     pub register: Transition,
+    pub immediate: Transition,
     pub comma: Transition,
     // TODO: more options for syntax
     
@@ -62,8 +56,9 @@ pub struct Assembler {
 
 impl Assembler {
     pub fn assemble(&self, source: &str) -> LoggedResult<Vec<u8>> {
-        let origin = "[unknonn]";
+        let origin = "[unknown]";
         let mut captured_registers = Vec::new();
+        let mut captured_immediates = Vec::new();
         let mut output = Vec::new();
         let mut logger = Logger::new(None);
         
@@ -88,6 +83,17 @@ impl Assembler {
                         
                         let codegen = loop {
                             match lexer.next() {
+                                Some(Lexeme{ token: Token::Integer(int), slice }) => {
+                                    if let Transition::NextState(next) = instruction.states[current_state].immediate {
+                                        captured_immediates.push(int);
+                                        current_state = next;
+                                    } else {
+                                        logger.log_error(format!("unexpected immediate: '{}'", slice));
+                                        logger.log_error(format!("syntaxes available for {}: {:?}", name, instruction.syntaxes));
+                                        continue 'outer;
+                                    }
+                                },
+                                
                                 Some(Lexeme{ token: Token::Register(r), slice }) => {
                                     if let Transition::NextState(next) = instruction.states[current_state].register {
                                         if r > 15 {
@@ -131,13 +137,31 @@ impl Assembler {
                             }
                         };
                         
+                        let decode = |codegen: &CodegenData| match *codegen {
+                            CodegenData::Byte(b) => b,
+                            CodegenData::Register(r) => captured_registers[r],
+                            CodegenData::Immediate(imm, _) => captured_immediates[imm] as u8,
+                        };
+                        
                         for data in codegen {
                             match data {
-                                Codegen::Data(data) => output.push(data.as_byte(&captured_registers)),
+                                Codegen::Data(data) => {
+                                    match *data {
+                                        CodegenData::Immediate(imm, b) => {
+                                            let imm = captured_immediates[imm];
+                                            if imm.leading_zeros() < (64-b+1) as u32 {
+                                                logger.log_warning(format!("'{}' will be truncated to {} bits", imm, b));
+                                            }
+                                            let bytes = b / 8;
+                                            output.extend(&imm.to_le_bytes()[..bytes]);
+                                        },
+                                        _ => output.push(decode(data)),
+                                    }
+                                },
                                 Codegen::UpperLower(upper, lower) => {
-                                    let upper = upper.as_byte(&captured_registers);
-                                    let lower = lower.as_byte(&captured_registers);
-                                    output.push((upper << 4) & 0xF0 | lower & 0xF);
+                                    let upper = decode(upper);
+                                    let lower = decode(lower);
+                                    output.push((upper & 0xF) << 4 | (lower & 0xF));
                                 }
                             }
                         }

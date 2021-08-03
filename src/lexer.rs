@@ -7,12 +7,12 @@ fn trim<'a>(lex: &mut logos::Lexer<'a, Token<'a>>, begin: usize, end: usize) -> 
 }
 
 #[inline]
-fn parse_int<'a>(lex: &mut logos::Lexer<'a, Token<'a>>) -> Result<u64, std::num::ParseIntError> {
+fn parse_int<'a>(lex: &mut logos::Lexer<'a, Token<'a>>) -> Result<usize, std::num::ParseIntError> {
     let slice = lex.slice();
     if slice.starts_with("0x") || slice.starts_with("0X") {
-        u64::from_str_radix(&slice[2..], 16)
+        usize::from_str_radix(&slice[2..], 16)
     } else if slice.starts_with("0b") || slice.starts_with("0B") {
-        u64::from_str_radix(&slice[2..], 2)
+        usize::from_str_radix(&slice[2..], 2)
     } else {
         slice.parse()
     }
@@ -29,8 +29,8 @@ pub enum Token<'a> {
     #[regex("[iI]\\d+", |lex| trim(lex, 1, 0).parse())]
     Immediate(usize),
     
-    #[regex("[_a-zA-Z]\\w*:")]
-    Label(&'a str),
+    // #[regex("[_a-zA-Z]\\w*:")]
+    // Label(&'a str),
     
     #[regex("\\.[_a-zA-Z0-9]\\w*")]
     Directive(&'a str),
@@ -39,13 +39,16 @@ pub enum Token<'a> {
     String(&'a str),
     
     #[regex("(0[xX][\\da-fA-F]+)|(0[bB][01]+)|\\d+", parse_int)]
-    Integer(u64),
+    Integer(usize),
     
     #[token("->")]
     Arrow,
     
     #[token(",")]
     Comma,
+    
+    #[token(":")]
+    Colon,
     
     #[token("|")]
     Or,

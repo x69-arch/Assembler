@@ -80,7 +80,7 @@ impl Logger {
         } else {
             Some(callback())
         };
-        LoggedResult { result, logs: self.logs}
+        LoggedResult { result, logs: self.logs }
     }
 }
 
@@ -90,8 +90,7 @@ pub struct LoggedResult<T> {
 }
 
 impl<T> LoggedResult<T> {
-    pub fn logs(&self) -> &[Log] { &self.logs }
-    pub fn value(self) -> Option<T> { self.result }
+    pub fn unwrap(self) -> (Option<T>, Vec<Log>) { (self.result, self.logs) }
     
     pub fn if_ok<F: FnOnce(T)>(self, logger: &mut Logger, callback: F) {
         for mut log in self.logs {
