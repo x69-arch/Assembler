@@ -1,4 +1,4 @@
-use crate::{log, log::Log};
+use crate::{log, log::LoggedResult};
 use crate::lexer::{Lexer, Lexeme, Token};
 use std::collections::HashMap;
 
@@ -61,11 +61,11 @@ pub struct Assembler {
 }
 
 impl Assembler {
-    pub fn assemble(&self, source: &str) -> (Option<Vec<u8>>, Vec<Log>) {
+    pub fn assemble(&self, source: &str) -> LoggedResult<Vec<u8>> {
         let origin = "[unknonn]";
-        let mut logs = Vec::new();
         let mut captured_registers = Vec::new();
         let mut output = Vec::new();
+        let mut result = LoggedResult::new();
         
         'outer: for (line, source) in source.lines().enumerate() {
             let mut lexer = Lexer::new(source);
@@ -79,7 +79,7 @@ impl Assembler {
                         let instruction = if let Some(ins) = self.instructions.get(&name) {
                             ins
                         } else {
-                            logs.push(log!(Error, origin, line, "unknown instruction: '{}'", lexeme.slice));
+                            result.push_log(log!(Error, origin, line, "unknown instruction: '{}'", lexeme.slice));
                             continue;
                         };
                         
@@ -90,14 +90,14 @@ impl Assembler {
                                 Some(Lexeme{ token: Token::Register(r), slice }) => {
                                     if let Transition::NextState(next) = instruction.states[current_state].register {
                                         if r > 15 {
-                                            logs.push(log!(Error, origin, line, "register out of bounds: '{}'", slice));
+                                            result.push_log(log!(Error, origin, line, "register out of bounds: '{}'", slice));
                                             continue 'outer;
                                         }
                                         captured_registers.push(r as u8);
                                         current_state = next;
                                     } else {
-                                        logs.push(log!(Error, origin, line, "unexpected register: '{}'", slice));
-                                        logs.push(log!(Error, origin, line, "syntaxes available for {}: {:?}", name, instruction.syntaxes));
+                                        result.push_log(log!(Error, origin, line, "unexpected register: '{}'", slice));
+                                        result.push_log(log!(Error, origin, line, "syntaxes available for {}: {:?}", name, instruction.syntaxes));
                                         continue 'outer;
                                     }
                                 },
@@ -106,8 +106,8 @@ impl Assembler {
                                     if let Transition::NextState(next) = instruction.states[current_state].comma {
                                         current_state = next;
                                     } else {
-                                        logs.push(log!(Error, origin, line, "unexpected comma"));
-                                        logs.push(log!(Error, origin, line, "syntaxes available for {}: {:?}", name, instruction.syntaxes));
+                                        result.push_log(log!(Error, origin, line, "unexpected comma"));
+                                        result.push_log(log!(Error, origin, line, "syntaxes available for {}: {:?}", name, instruction.syntaxes));
                                         continue 'outer;
                                     }
                                 },
@@ -116,15 +116,15 @@ impl Assembler {
                                     if let Some(ref codegen) = instruction.states[current_state].accept_codegen {
                                         break codegen;
                                     } else {
-                                        logs.push(log!(Error, origin, line, "syntax error"));
-                                        logs.push(log!(Error, origin, line, "syntaxes available for {}: {:?}", name, instruction.syntaxes));
+                                        result.push_log(log!(Error, origin, line, "syntax error"));
+                                        result.push_log(log!(Error, origin, line, "syntaxes available for {}: {:?}", name, instruction.syntaxes));
                                         continue 'outer;
                                     }
                                 },
                                 
                                 Some(Lexeme{ slice, .. }) => {
-                                    logs.push(log!(Error, origin, line, "unexpected token: '{}'", slice));
-                                    logs.push(log!(Error, origin, line, "syntaxes available for {}: {:?}", name, instruction.syntaxes));
+                                    result.push_log(log!(Error, origin, line, "unexpected token: '{}'", slice));
+                                    result.push_log(log!(Error, origin, line, "syntaxes available for {}: {:?}", name, instruction.syntaxes));
                                     continue 'outer;
                                 },
                             }
@@ -136,22 +136,17 @@ impl Assembler {
                                 Codegen::UpperLower(upper, lower) => {
                                     let upper = upper.as_byte(&captured_registers);
                                     let lower = lower.as_byte(&captured_registers);
-                                    output.push(upper << 4 | lower);
+                                    output.push((upper << 4) & 0xF0 | lower & 0xF);
                                 }
                             }
                         }
                     },
                     
-                    _ => logs.push(log!(Error, origin, line, "unexpected token: '{}'", lexeme.slice))
+                    _ => result.push_log(log!(Error, origin, line, "unexpected token: '{}'", lexeme.slice))
                 }
             }
         }
         
-        // If errors were produced
-        if logs.iter().any(Log::is_error) {
-            (None, logs)
-        } else {
-            (Some(output), logs)
-        }
+        result.return_value(||output)
     }
 }
