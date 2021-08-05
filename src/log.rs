@@ -1,7 +1,7 @@
 use colored::Colorize;
 
-#[derive(Debug)]
-pub enum LogLevel {
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
+pub enum Level {
     Warning,
     Error,
 }
@@ -16,11 +16,11 @@ pub struct Origin {
 pub struct Log {
     origin: Option<Origin>,
     message: String,
-    level: LogLevel,
+    level: Level,
 }
 
 impl Log {
-    pub fn new(level: LogLevel, origin: Option<Origin>, message: String) -> Self {
+    pub fn new(level: Level, origin: Option<Origin>, message: String) -> Self {
         Self {
             origin,
             message,
@@ -28,14 +28,14 @@ impl Log {
         }
     }
     
-    pub fn is_error(&self) -> bool { matches!(self.level, LogLevel::Error) }
+    pub fn is_error(&self) -> bool { matches!(self.level, Level::Error) }
 }
 
 impl std::fmt::Display for Log {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self.level {
-            LogLevel::Warning => write!(f, "{}", "Warning: ".yellow().bold())?,
-            LogLevel::Error => write!(f, "{}", "Error: ".red().bold())?,
+            Level::Warning => write!(f, "{}", "Warning: ".yellow().bold())?,
+            Level::Error => write!(f, "{}", "Error: ".red().bold())?,
         };
         match &self.origin {
             Some(origin) => write!(f, "{}:{}: {}", origin.file, origin.line + 1, self.message),
@@ -59,11 +59,11 @@ impl Logger {
     }
     
     pub fn log_warning(&mut self, message: String) {
-        self.logs.push(Log::new(LogLevel::Warning, self.origin.clone(), message));
+        self.logs.push(Log::new(Level::Warning, self.origin.clone(), message));
     }
     
     pub fn log_error(&mut self, message: String) {
-        self.logs.push(Log::new(LogLevel::Error, self.origin.clone(), message));
+        self.logs.push(Log::new(Level::Error, self.origin.clone(), message));
     }
     
     pub fn is_error(&self) -> bool {
@@ -90,17 +90,29 @@ pub struct LoggedResult<T> {
 }
 
 impl<T> LoggedResult<T> {
-    pub fn unwrap(self) -> (Option<T>, Vec<Log>) { (self.result, self.logs) }
-    
-    pub fn if_ok<F: FnOnce(T)>(self, logger: &mut Logger, callback: F) {
-        for mut log in self.logs {
+    fn drain_logs(&mut self, logger: &mut Logger) {
+        for mut log in self.logs.drain(0..) {
             if log.origin.is_none() {
                 log.origin = logger.origin.clone();
             }
             logger.logs.push(log);
         }
+    }
+    
+    pub fn unwrap_logged(mut self, logger: &mut Logger) -> Option<T> {
+        self.drain_logs(logger);
+        self.result
+    }
+    
+    pub fn if_ok<F: FnOnce(T)>(mut self, logger: &mut Logger, callback: F) {
+        self.drain_logs(logger);
         if let Some(result) = self.result {
             callback(result);
         }
     }
+    
+    pub fn unwrap(self) -> (Option<T>, Vec<Log>) { (self.result, self.logs) }
+    
+    pub fn is_ok(&self) -> bool { self.result.is_some() }
+    pub fn is_err(&self) -> bool { self.result.is_none() }
 }
